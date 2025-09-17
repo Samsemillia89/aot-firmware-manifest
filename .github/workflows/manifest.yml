@@ -2,7 +2,7 @@ name: manifest
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 * * * *"   # stündlich
+    - cron: "0 0 * * *"   # täglich um 00:00 UTC
 
 permissions:
   contents: write
