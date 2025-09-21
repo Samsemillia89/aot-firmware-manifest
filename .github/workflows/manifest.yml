@@ -1,37 +1,81 @@
-name: manifest
+name: Build & Deploy firmware manifest (push / manual)
+
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
+<<<<<<< HEAD
   schedule:
     - cron: "0 0 * * *"   # täglich um 00:00 UTC
+=======
+    inputs:
+      fw_repos:
+        description: "Kommagetrennt: owner/repo[,owner/repo...]"
+        required: false
+        default: ""
+      channel:
+        description: "stable | beta"
+        required: false
+        default: "stable"
+>>>>>>> 045b2ac (feat: robust manifest builder (tolerant to missing repos/releases))
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: true
 
 jobs:
-  build-manifest:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.x"
+          cache: "pip"
 
-      - name: Run builder
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Build manifest
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          FW_REPOS: Samsemillia89/AOT-Controller,Samsemillia89/AOT-Display
-          FW_CHANNEL: stable
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}     # optional, für höheres API-Limit
+          FW_REPOS: ${{ inputs.fw_repos || '' }}    # z.B. "Samsemillia89/AOT-Controller,Samsemillia89/AOT-Display"
+          FW_CHANNEL: ${{ inputs.channel || 'stable' }}
+          FW_OUT_DIR: dist
+          FW_OUT_FILE: firmware.json
         run: |
-          python3 manifest_builder.py
+          set -e
+          mkdir -p dist
+          python manifest_builder.py
+          echo "---- manifest preview ----"
+          cat dist/firmware.json || true
 
-      - name: Commit to gh-pages
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github"
-          git checkout -B gh-pages
-          mv firmware.json index.json
-          git add index.json
-          git commit -m "Update manifest"
-          git push -f origin gh-pages
+      - name: Upload artifact (manifest)
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-manifest
+          path: dist/firmware.json
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4

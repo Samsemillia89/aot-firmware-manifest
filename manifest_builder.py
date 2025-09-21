@@ -1,58 +1,96 @@
-import os, json, hashlib, requests, sys, datetime
+import os, json, requests, datetime, sys
 
-GHTOKEN = os.environ["GH_TOKEN"]
-REPOS = os.environ["FW_REPOS"].split(",")  # "Samsemillia89/AOT-Controller,Samsemillia89/AOT-Display"
-CHANNEL = os.getenv("FW_CHANNEL", "stable")
+# ---------------- Env / Defaults ----------------
+GH_TOKEN   = os.getenv("GH_TOKEN", "").strip()           # optional
+FW_REPOS   = [r.strip() for r in os.getenv("FW_REPOS", "").split(",") if r.strip()]  # optional
+FW_CHANNEL = os.getenv("FW_CHANNEL", "stable")
 
+OUT_DIR    = os.getenv("FW_OUT_DIR", ".").strip() or "."
+OUT_FILE   = os.getenv("FW_OUT_FILE", "firmware.json").strip() or "firmware.json"
+
+# ---------------- HTTP Session ------------------
 S = requests.Session()
-S.headers.update({"Authorization": f"Bearer {GHTOKEN}", "Accept": "application/vnd.github+json"})
+S.headers.update({"Accept": "application/vnd.github+json"})
+if GH_TOKEN:
+    S.headers.update({"Authorization": f"Bearer {GH_TOKEN}"})
 
-def latest_release(owner_repo):
-    r = S.get(f"https://api.github.com/repos/{owner_repo}/releases/latest")
-    r.raise_for_status()
-    return r.json()
 
-def choose_asset(rel):
-    # nimm erstes .bin Asset
+def latest_release(owner_repo: str):
+    """
+    Liefert das neueste Release-JSON oder None.
+    Überspringt sauber bei 404 (keine Releases) oder Netzwerk-/RateLimit-Fehlern.
+    """
+    url = f"https://api.github.com/repos/{owner_repo}/releases/latest"
+    try:
+        r = S.get(url, timeout=20)
+        if r.status_code == 404:
+            return None  # noch kein Release
+        r.raise_for_status()
+        return r.json()
+    except requests.RequestException:
+        return None
+
+
+def choose_first_bin_asset(rel: dict):
+    """Nimmt das erste .bin-Asset in einem Release, sonst None."""
+    if not rel:
+        return None
     for a in rel.get("assets", []):
-        if a["name"].endswith(".bin"):
+        if str(a.get("name", "")).endswith(".bin"):
             return a
     return None
 
-def sha256_of_url(url):
-    # nicht downloaden: GitHub liefert Content-Length, SHA machen wir optional (wenn gewünscht: streamen)
-    return None
 
-devices = []
-for rr in REPOS:
-    rel = latest_release(rr.strip())
-    asset = choose_asset(rel)
-    if not asset: 
-        continue
-    name = asset["name"]                        # z.B. controller_1.3.0.bin
-    version = rel["tag_name"].lstrip("v")       # v1.3.0 -> 1.3.0
-    url = asset["browser_download_url"]
-    size = asset["size"]
-    device_id = name.split("_")[0]              # vor dem ersten "_" -> "controller"
+def build_manifest():
+    devices = []
 
-    devices.append({
-        "id": device_id,
-        "name": device_id.capitalize(),
-        "version": version,
-        "url": url,
-        "filesize": size,
-        "sha256": "",                           # optional, leer lassen oder in Zukunft befüllen
-        "min_app_version": "1.0.0",
-        "critical": False
-    })
+    for repo in FW_REPOS:
+        rel = latest_release(repo)
+        if not rel:
+            # Kein Release vorhanden oder API-Fehler -> Repo ignorieren
+            continue
 
-manifest = {
-    "schema": 1,
-    "channel": CHANNEL,
-    "updated_at": datetime.datetime.utcnow().isoformat()+"Z",
-    "devices": devices
-}
+        asset = choose_first_bin_asset(rel)
+        if not asset:
+            # Release ohne .bin -> ignorieren
+            continue
 
-with open("firmware.json", "w") as f:
-    json.dump(manifest, f, indent=2)
-print("Wrote firmware.json with", len(devices), "entries")
+        tag = str(rel.get("tag_name") or "")
+        version = tag.lstrip("v") if tag else "0.0.0"
+
+        name = asset.get("name", "")
+        url  = asset.get("browser_download_url", "")
+        size = int(asset.get("size", 0) or 0)
+
+        # Device-ID aus Dateinamen bis zum ersten "_" (Fallback: Repo-Name)
+        device_id = name.split("_")[0] if "_" in name and name.split("_")[0] else repo.split("/")[-1]
+
+        devices.append({
+            "id": device_id,
+            "name": device_id.capitalize(),
+            "version": version,
+            "url": url,
+            "filesize": size,
+            "sha256": "",                 # optional: später befüllen (Hashprüfung)
+            "min_app_version": "1.0.0",
+            "critical": False
+        })
+
+    manifest = {
+        "schema": 1,
+        "channel": FW_CHANNEL,
+        "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "devices": devices
+    }
+
+    os.makedirs(OUT_DIR, exist_ok=True)
+    out_path = os.path.join(OUT_DIR, OUT_FILE)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+
+    print(f"[manifest] wrote {out_path} with {len(devices)} device(s).")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(build_manifest())
