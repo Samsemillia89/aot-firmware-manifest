@@ -4,10 +4,6 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
-<<<<<<< HEAD
-  schedule:
-    - cron: "0 0 * * *"   # täglich um 00:00 UTC
-=======
     inputs:
       fw_repos:
         description: "Kommagetrennt: owner/repo[,owner/repo...]"
@@ -17,7 +13,6 @@ on:
         description: "stable | beta"
         required: false
         default: "stable"
->>>>>>> 045b2ac (feat: robust manifest builder (tolerant to missing repos/releases))
 
 permissions:
   contents: read
